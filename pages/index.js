@@ -6,19 +6,16 @@ const C = {
   accent: '#6C63FF', gold: '#FFD166', goldGlow: 'rgba(255,209,102,0.3)',
   danger: '#EF476F', text: '#E8EAF6', muted: '#7B80A0',
 }
-
 const gs = `
   @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@400;500;600&display=swap');
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   body{background:${C.bg};color:${C.text};font-family:'Inter',sans-serif}
-  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes spin2{to{transform:rotate(360deg)}}
   @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
   @keyframes winnerPop{0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
   @keyframes marquee{0%{top:-60px}100%{top:110vh}}
   .numBtn:hover{border-color:#6C63FF !important}
 `
-
-const SPIN_DURATION = 3000
 
 export default function Home() {
   const [screen, setScreen] = useState('code')
@@ -30,40 +27,40 @@ export default function Home() {
   const [myNumber, setMyNumber] = useState(null)
   const [countdown, setCountdown] = useState(3)
   const [err, setErr] = useState('')
+  const [numErr, setNumErr] = useState('')
   const [loading, setLoading] = useState(false)
   const [closeCountdown, setCloseCountdown] = useState(5)
   const [winner, setWinner] = useState(null)
   const [spinAngle, setSpinAngle] = useState(0)
+  const [showSpin, setShowSpin] = useState(false)
   const pollRef = useRef(null)
   const prevStatus = useRef(null)
   const cdDone = useRef(false)
   const sessionCode = useRef('')
   const spinRAF = useRef(null)
-  const spinDone = useRef(false)
+  const spinTriggered = useRef(false)
 
-  function startSpinSync(spinStartedAt, onDone) {
-    cancelAnimationFrame(spinRAF.current)
-    spinDone.current = false
-    const serverStart = new Date(spinStartedAt).getTime()
-    const totalRotation = 1080 // 3바퀴 고정
+  // 단순 로컬 애니메이션 - 시간 기반 아님
+  function runSpinAnimation(onDone) {
+    setShowSpin(true)
+    let startTime = null
+    const duration = 4000
+    const totalRot = 1440
 
-    const animate = (now) => {
-      const elapsed = now - serverStart
-      // elapsed가 음수거나 비정상이면 즉시 종료
-      if (elapsed < 0) { spinDone.current = true; if (onDone) onDone(); return }
-      const progress = Math.min(elapsed / SPIN_DURATION, 1)
+    const step = (now) => {
+      if (!startTime) startTime = now
+      const elapsed = now - startTime
+      const progress = Math.min(elapsed / duration, 1)
       const ease = 1 - Math.pow(1 - progress, 3)
-      setSpinAngle((ease * totalRotation) % 360)
-
+      setSpinAngle((ease * totalRot) % 360)
       if (progress < 1) {
-        spinRAF.current = requestAnimationFrame(animate)
+        spinRAF.current = requestAnimationFrame(step)
       } else {
-        spinDone.current = true
-        cancelAnimationFrame(spinRAF.current)
         if (onDone) onDone()
       }
     }
-    spinRAF.current = requestAnimationFrame(animate)
+    cancelAnimationFrame(spinRAF.current)
+    spinRAF.current = requestAnimationFrame(step)
   }
 
   const poll = useCallback(async () => {
@@ -81,37 +78,25 @@ export default function Home() {
     if (prev === 'waiting' && st === 'open' && !cdDone.current) {
       cdDone.current = true
       setScreen('countdown')
-      let n = 3
-      setCountdown(n)
+      let n = 3; setCountdown(n)
       const t = setInterval(() => {
-        n--
-        setCountdown(n)
+        n--; setCountdown(n)
         if (n <= 0) { clearInterval(t); setScreen('open') }
       }, 1000)
     }
 
-    if (st === 'ended' && prev === 'open') setScreen('wait_spin')
-    if (st === 'ended' && prev === 'waiting') setScreen('wait_spin')
+    if (st === 'ended' && (prev === 'open' || prev === 'waiting')) setScreen('ended')
 
-    if (st === 'spinning' && prev !== 'spinning' && s.spin_started_at && !spinDone.current) {
+    // result 감지하면 돌림판 애니메이션 실행 (한 번만)
+    if (st === 'result' && !spinTriggered.current) {
+      spinTriggered.current = true
+      const w = p?.find(x => x.number === s.spinner_result)
       setScreen('spinning')
       setWinner(null)
-      startSpinSync(s.spin_started_at)
-    }
-
-    if (st === 'result' && prev !== 'result') {
-      const w = p?.find(x => x.number === s.spinner_result)
-      cancelAnimationFrame(spinRAF.current)
-      if (s.spin_started_at) {
-        setScreen('spinning')
-        startSpinSync(s.spin_started_at, () => {
-          if (w) setWinner(w)
-          setScreen('result')
-        })
-      } else {
+      runSpinAnimation(() => {
         if (w) setWinner(w)
         setScreen('result')
-      }
+      })
     }
 
     if (st === 'closed' && prev !== 'closed') setScreen('closing')
@@ -120,7 +105,7 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    if (['waiting', 'open', 'done', 'wait_spin', 'spinning', 'result', 'ended'].includes(screen)) {
+    if (['waiting', 'open', 'done', 'ended', 'spinning'].includes(screen)) {
       poll()
       pollRef.current = setInterval(poll, 1500)
     }
@@ -129,22 +114,13 @@ export default function Home() {
 
   useEffect(() => {
     if (screen !== 'closing') return
-    let sec = 5
-    setCloseCountdown(sec)
+    let sec = 5; setCloseCountdown(sec)
     const t = setInterval(() => {
-      sec--
-      setCloseCountdown(sec)
+      sec--; setCloseCountdown(sec)
       if (sec <= 0) { clearInterval(t); window.close() }
     }, 1000)
     return () => clearInterval(t)
   }, [screen])
-
-  useEffect(() => {
-    if (!pid || !myNumber) return
-    const release = () => navigator.sendBeacon('/api/participant', JSON.stringify({ participant_id: pid }))
-    window.addEventListener('beforeunload', release)
-    return () => window.removeEventListener('beforeunload', release)
-  }, [pid, myNumber])
 
   async function enterCode() {
     setErr(''); setLoading(true)
@@ -178,6 +154,8 @@ export default function Home() {
 
   async function pickNumber(num) {
     if (myNumber) return
+    setNumErr('')
+    // 즉시 UI 반응
     setMyNumber(num)
     setScreen('done')
     const r = await fetch('/api/participant', {
@@ -185,9 +163,14 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ participant_id: pid, session_id: sessionCode.current, number: num })
     })
+    const data = await r.json()
     if (!r.ok) {
+      // 실패 = 동시 클릭으로 누군가 먼저 선택함
       setMyNumber(null)
       setScreen('open')
+      if (data.error?.includes('이미 선택된')) {
+        setNumErr(`${num}번은 방금 다른 분이 선택했습니다. 다른 번호를 골라주세요!`)
+      }
       poll()
     }
   }
@@ -264,24 +247,20 @@ export default function Home() {
                 {screen === 'done' ? `✅ ${myNumber}번 선택 완료!` : '번호를 선택하세요!'}
               </div>
               <div style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>
-                1~{session.max_num} 중 하나 선택 · 중복 불가
+                1~{session.max_num < 999 ? session.max_num : '?'} 중 하나 선택 · 중복 불가
               </div>
+              {numErr && (
+                <div style={{ marginTop: 10, color: C.danger, fontWeight: 600, fontSize: 14 }}>
+                  ⚠️ {numErr}
+                </div>
+              )}
             </div>
-            <NumberGrid max={session.max_num} taken={takenNums} myNum={myNumber}
+            <NumberGrid max={session.max_num < 999 ? session.max_num : 30}
+              taken={takenNums} myNum={myNumber}
               onPick={screen === 'open' ? pickNumber : null} />
             <div style={{ marginTop: 16, color: C.muted, fontSize: 13, textAlign: 'center' }}>
-              선택됨: {takenNums.size} / {session.max_num}
+              선택됨: {takenNums.size} / {session.max_num < 999 ? session.max_num : '?'}
             </div>
-          </div>
-        )}
-
-        {screen === 'wait_spin' && (
-          <div style={{ textAlign: 'center' }}>
-            <Spinner />
-            <div style={{ fontFamily: 'Syne', fontSize: 22, fontWeight: 700, marginTop: 24, color: C.gold }}>
-              곧이어 추첨이 시작됩니다
-            </div>
-            <div style={{ color: C.muted, fontSize: 15, marginTop: 10 }}>잠시만 기다려주세요!</div>
           </div>
         )}
 
@@ -368,19 +347,14 @@ function NumberGrid({ max, taken, myNum, onPick }) {
 function SpinWheel({ participants, angle }) {
   const size = 280, cx = size / 2, cy = size / 2, r = cx - 12
   if (participants.length === 0) return null
-
-  // 1명이면 돌림판 대신 이름만 표시
   if (participants.length === 1) {
     return (
-      <div style={{ textAlign: 'center' }}>
-        <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
-          <circle cx={cx} cy={cy} r={r} fill="hsl(260,65%,55%)" stroke="#0D0F1A" strokeWidth={1.5} />
-          <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle"
-            fontSize={18} fontWeight="700" fill="#fff">{participants[0].number}</text>
-          <circle cx={cx} cy={cy} r={10} fill="#fff" />
-          <polygon points={`${cx},${cy-r-2} ${cx-9},${cy-r+12} ${cx+9},${cy-r+12}`} fill="#FFD166" />
-        </svg>
-      </div>
+      <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
+        <circle cx={cx} cy={cy} r={r} fill="hsl(260,65%,55%)" stroke="#0D0F1A" strokeWidth={2} />
+        <text x={cx} y={cy - 10} textAnchor="middle" dominantBaseline="middle" fontSize={22} fontWeight="700" fill="#fff">{participants[0].number}번</text>
+        <text x={cx} y={cy + 16} textAnchor="middle" dominantBaseline="middle" fontSize={13} fill="#fff">{participants[0].nickname}</text>
+        <polygon points={`${cx},${cy-r-2} ${cx-9},${cy-r+12} ${cx+9},${cy-r+12}`} fill="#FFD166" />
+      </svg>
     )
   }
   const sliceAngle = 360 / participants.length
@@ -394,8 +368,7 @@ function SpinWheel({ participants, angle }) {
         const large = sliceAngle > 180 ? 1 : 0
         const hue = i * 360 / participants.length
         const mid = (start + end) / 2
-        const tx = cx + r * 0.65 * Math.cos(mid)
-        const ty = cy + r * 0.65 * Math.sin(mid)
+        const tx = cx + r * 0.65 * Math.cos(mid), ty = cy + r * 0.65 * Math.sin(mid)
         return (
           <g key={p.id}>
             <path d={`M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large},1 ${x2},${y2} Z`}
@@ -416,34 +389,19 @@ function SpinWheel({ participants, angle }) {
   )
 }
 
-function Card({ children }) {
-  return <div style={{ background: '#1E2235', border: '1px solid #2A2F4A', borderRadius: 16, padding: 32, maxWidth: 420, width: '100%' }}>{children}</div>
-}
-function Title({ children }) {
-  return <div style={{ fontFamily: 'Syne', fontSize: 28, fontWeight: 800, color: '#6C63FF', marginBottom: 8, textAlign: 'center' }}>{children}</div>
-}
-function Sub({ children }) {
-  return <div style={{ color: '#7B80A0', fontSize: 14, marginBottom: 24, textAlign: 'center' }}>{children}</div>
-}
+function Card({ children }) { return <div style={{ background: '#1E2235', border: '1px solid #2A2F4A', borderRadius: 16, padding: 32, maxWidth: 420, width: '100%' }}>{children}</div> }
+function Title({ children }) { return <div style={{ fontFamily: 'Syne', fontSize: 28, fontWeight: 800, color: '#6C63FF', marginBottom: 8, textAlign: 'center' }}>{children}</div> }
+function Sub({ children }) { return <div style={{ color: '#7B80A0', fontSize: 14, marginBottom: 24, textAlign: 'center' }}>{children}</div> }
 function Input({ value, onChange, placeholder, onKeyDown, maxLength, center }) {
   return <input value={value} onChange={onChange} placeholder={placeholder} onKeyDown={onKeyDown} maxLength={maxLength}
     style={{ width: '100%', background: '#161928', border: '1px solid #2A2F4A', borderRadius: 8,
       color: '#E8EAF6', padding: '10px 14px', fontSize: 16, outline: 'none', fontFamily: 'Inter',
       marginBottom: 12, textAlign: center ? 'center' : 'left' }} />
 }
-function Err({ children }) {
-  return <div style={{ color: '#EF476F', fontSize: 13, marginBottom: 10, textAlign: 'center' }}>{children}</div>
-}
+function Err({ children }) { return <div style={{ color: '#EF476F', fontSize: 13, marginBottom: 10, textAlign: 'center' }}>{children}</div> }
 function Btn({ children, onClick, loading, full }) {
-  return (
-    <button onClick={onClick} disabled={loading} style={{
-      width: full ? '100%' : 'auto', background: '#6C63FF', color: '#fff', border: 'none',
-      borderRadius: 8, padding: '12px 24px', fontFamily: 'Syne', fontWeight: 700, fontSize: 15,
-      cursor: loading ? 'wait' : 'pointer',
-    }}>{loading ? '...' : children}</button>
-  )
+  return <button onClick={onClick} disabled={loading} style={{ width: full ? '100%' : 'auto', background: '#6C63FF', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 24px', fontFamily: 'Syne', fontWeight: 700, fontSize: 15, cursor: loading ? 'wait' : 'pointer' }}>{loading ? '...' : children}</button>
 }
 function Spinner() {
-  return <div style={{ width: 48, height: 48, border: '4px solid #2A2F4A', borderTopColor: '#6C63FF',
-    borderRadius: '50%', animation: 'spin 0.9s linear infinite', margin: '0 auto' }} />
+  return <div style={{ width: 48, height: 48, border: '4px solid #2A2F4A', borderTopColor: '#6C63FF', borderRadius: '50%', animation: 'spin2 0.9s linear infinite', margin: '0 auto' }} />
 }
