@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Head from 'next/head'
 
 const C = {
-  bg: '#0D0F1A', surface: '#161928', card: '#1E2235', border: '#2A2F4A',
+  bg: '#0D0F1A', card: '#1E2235', border: '#2A2F4A',
   accent: '#6C63FF', gold: '#FFD166', goldGlow: 'rgba(255,209,102,0.3)',
   success: '#06D6A0', danger: '#EF476F', text: '#E8EAF6', muted: '#7B80A0',
   taken: '#2A2F4A', takenText: '#4A4F6A',
@@ -16,6 +16,7 @@ const gs = `
   @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
   @keyframes winnerPop{0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
   @keyframes marquee{0%{top:-60px}100%{top:110vh}}
+  .numBtn:hover{border-color:#6C63FF !important}
 `
 
 export default function Home() {
@@ -32,11 +33,38 @@ export default function Home() {
   const [closeCountdown, setCloseCountdown] = useState(5)
   const [winner, setWinner] = useState(null)
   const [spinAngle, setSpinAngle] = useState(0)
+  const [isSpinning, setIsSpinning] = useState(false)
   const pollRef = useRef(null)
   const prevStatus = useRef(null)
   const cdDone = useRef(false)
   const sessionCode = useRef('')
-  const spinTimerRef = useRef(null)
+  const spinRAF = useRef(null)
+  const spinStartTime = useRef(null)
+  const spinStartAngle = useRef(0)
+
+  // 돌림판 애니메이션 - 관리자와 동일하게
+  function startSpinAnimation(onDone) {
+    setIsSpinning(true)
+    const totalRotation = 1800 + Math.random() * 720
+    const duration = 4000
+    spinStartTime.current = performance.now()
+    spinStartAngle.current = 0
+
+    const animate = (now) => {
+      const elapsed = now - spinStartTime.current
+      const progress = Math.min(elapsed / duration, 1)
+      const ease = 1 - Math.pow(1 - progress, 3)
+      const angle = ease * totalRotation
+      setSpinAngle(angle % 360)
+      if (progress < 1) {
+        spinRAF.current = requestAnimationFrame(animate)
+      } else {
+        setIsSpinning(false)
+        if (onDone) onDone()
+      }
+    }
+    spinRAF.current = requestAnimationFrame(animate)
+  }
 
   const poll = useCallback(async () => {
     const c = sessionCode.current
@@ -64,15 +92,18 @@ export default function Home() {
 
     if (st === 'spinning' && prev !== 'spinning') {
       setScreen('spinning')
-      clearInterval(spinTimerRef.current)
-      spinTimerRef.current = setInterval(() => setSpinAngle(a => a + 12), 50)
+      startSpinAnimation()
     }
 
     if (st === 'result' && prev !== 'result') {
-      clearInterval(spinTimerRef.current)
+      cancelAnimationFrame(spinRAF.current)
       const w = p?.find(x => x.number === s.spinner_result)
-      if (w) setWinner(w)
-      setScreen('result')
+      // 돌림판 먼저 보여주고 멈추는 애니메이션 후 당첨자 표시
+      setScreen('spinning')
+      startSpinAnimation(() => {
+        if (w) setWinner(w)
+        setScreen('result')
+      })
     }
 
     if (st === 'closed' && prev !== 'closed') setScreen('closing')
@@ -140,14 +171,20 @@ export default function Home() {
 
   async function pickNumber(num) {
     if (myNumber) return
+    // 즉시 UI 반응 (서버 응답 기다리지 않고 바로 반영)
+    setMyNumber(num)
+    setScreen('done')
     const r = await fetch('/api/participant', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ participant_id: pid, session_id: code.toUpperCase().trim(), number: num })
+      body: JSON.stringify({ participant_id: pid, session_id: sessionCode.current, number: num })
     })
-    if (!r.ok) { poll(); return }
-    setMyNumber(num)
-    setScreen('done')
+    if (!r.ok) {
+      // 실패 시 롤백
+      setMyNumber(null)
+      setScreen('open')
+      poll()
+    }
   }
 
   const takenNums = new Set(participants.filter(p => p.number).map(p => p.number))
@@ -159,7 +196,6 @@ export default function Home() {
       <style>{gs}</style>
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
 
-        {/* 당첨자 흘러내리는 텍스트 */}
         {screen === 'result' && winner && [...Array(6)].map((_, i) => (
           <div key={i} style={{
             position: 'fixed', left: `${5 + i * 16}%`, top: -60,
@@ -229,7 +265,12 @@ export default function Home() {
                 1~{session.max_num} 중 하나 선택 · 중복 불가
               </div>
             </div>
-            <NumberGrid max={session.max_num} taken={takenNums} myNum={myNumber} onPick={screen === 'open' ? pickNumber : null} />
+            <NumberGrid
+              max={session.max_num}
+              taken={takenNums}
+              myNum={myNumber}
+              onPick={screen === 'open' ? pickNumber : null}
+            />
             <div style={{ marginTop: 16, color: C.muted, fontSize: 13, textAlign: 'center' }}>
               선택됨: {takenNums.size} / {session.max_num}
             </div>
@@ -295,9 +336,9 @@ function NumberGrid({ max, taken, myNum, onPick }) {
         const isTaken = taken.has(n)
         const isMe = myNum === n
         return (
-          <button key={n} onClick={() => onPick && !isTaken && onPick(n)} style={{
+          <button key={n} className="numBtn" onClick={() => onPick && !isTaken && onPick(n)} style={{
             padding: '13px 0', fontFamily: 'Syne', fontWeight: 700, fontSize: 17,
-            borderRadius: 10, border: `2px solid ${isMe ? '#FFD166' : isTaken ? '#2A2F4A' : '#2A2F4A'}`,
+            borderRadius: 10, border: `2px solid ${isMe ? '#FFD166' : '#2A2F4A'}`,
             cursor: onPick && !isTaken ? 'pointer' : 'default',
             background: isMe ? '#FFD166' : isTaken ? '#2A2F4A' : '#1E2235',
             color: isMe ? '#0D0F1A' : isTaken ? '#4A4F6A' : '#E8EAF6',
@@ -325,10 +366,20 @@ function SpinWheel({ participants, angle }) {
         const x2 = cx + r * Math.cos(end), y2 = cy + r * Math.sin(end)
         const large = sliceAngle > 180 ? 1 : 0
         const hue = i * 360 / participants.length
+        const mid = (start + end) / 2
+        const tx = cx + r * 0.65 * Math.cos(mid)
+        const ty = cy + r * 0.65 * Math.sin(mid)
         return (
           <g key={p.id}>
             <path d={`M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large},1 ${x2},${y2} Z`}
               fill={`hsl(${hue},65%,55%)`} stroke="#0D0F1A" strokeWidth={1.5} />
+            {participants.length <= 30 && (
+              <text x={tx} y={ty} textAnchor="middle" dominantBaseline="middle"
+                fontSize={participants.length > 20 ? 8 : 11} fontWeight="700" fill="#fff"
+                transform={`rotate(${(i + 0.5) * sliceAngle + angle},${tx},${ty})`}>
+                {p.number}
+              </text>
+            )}
           </g>
         )
       })}
