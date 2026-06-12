@@ -105,7 +105,7 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    if (['waiting', 'open', 'done', 'ended', 'spinning'].includes(screen)) {
+    if (['waiting', 'open', 'done', 'ended', 'spinning', 'result', 'closing'].includes(screen)) {
       poll()
       pollRef.current = setInterval(poll, 1500)
     }
@@ -117,7 +117,7 @@ export default function Home() {
     let sec = 5; setCloseCountdown(sec)
     const t = setInterval(() => {
       sec--; setCloseCountdown(sec)
-      if (sec <= 0) { clearInterval(t); window.close() }
+      if (sec <= 0) { clearInterval(t); window.location.href = 'about:blank' }
     }, 1000)
     return () => clearInterval(t)
   }, [screen])
