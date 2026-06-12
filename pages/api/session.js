@@ -13,10 +13,11 @@ function generateCode() {
 }
 
 export default async function handler(req, res) {
+
   // 세션 생성
   if (req.method === 'POST') {
     const { admin_password, max_num } = req.body
-    if (!admin_password || !max_num) return res.status(400).json({ error: '필수값 누락' })
+    if (!admin_password) return res.status(400).json({ error: '필수값 누락' })
 
     let code, exists
     do {
@@ -28,12 +29,24 @@ export default async function handler(req, res) {
     const { data, error } = await supabase.from('sessions').insert({
       id: code,
       admin_password,
-      max_num: parseInt(max_num),
+      max_num: parseInt(max_num) || 999,
       status: 'waiting'
     }).select().single()
 
     if (error) return res.status(500).json({ error: error.message })
     return res.status(200).json({ session: data })
+  }
+
+  // 최대번호 변경
+  if (req.method === 'PUT') {
+    const { code, admin_password, max_num } = req.body
+    const { data: session } = await supabase.from('sessions').select('*').eq('id', code).single()
+    if (!session) return res.status(404).json({ error: '세션 없음' })
+    if (session.admin_password !== admin_password) return res.status(401).json({ error: '비밀번호 틀림' })
+
+    const { error } = await supabase.from('sessions').update({ max_num: parseInt(max_num) }).eq('id', code)
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ ok: true })
   }
 
   // 세션 조회
@@ -48,7 +61,7 @@ export default async function handler(req, res) {
       .from('participants')
       .select('id, nickname, number, picked_at')
       .eq('session_id', code)
-      .order('number', { ascending: true })
+      .order('number', { ascending: true, nullsFirst: false })
 
     return res.status(200).json({ session: data, participants: participants || [] })
   }
