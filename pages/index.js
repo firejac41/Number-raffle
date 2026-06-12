@@ -14,12 +14,12 @@ const gs = `
   body{background:${C.bg};color:${C.text};font-family:'Inter',sans-serif}
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
-  @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
   @keyframes winnerPop{0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
+  @keyframes marquee{0%{top:-60px}100%{top:110vh}}
 `
 
 export default function Home() {
-  const [screen, setScreen] = useState('code')   // code|nick|waiting|countdown|open|done|spinning|result|ended|closed|full
+  const [screen, setScreen] = useState('code')
   const [code, setCode] = useState('')
   const [nick, setNick] = useState('')
   const [pid, setPid] = useState('')
@@ -29,13 +29,19 @@ export default function Home() {
   const [countdown, setCountdown] = useState(3)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
+  const [closeCountdown, setCloseCountdown] = useState(5)
+  const [winner, setWinner] = useState(null)
+  const [spinAngle, setSpinAngle] = useState(0)
   const pollRef = useRef(null)
   const prevStatus = useRef(null)
   const cdDone = useRef(false)
+  const sessionCode = useRef('')
+  const spinTimerRef = useRef(null)
 
   const poll = useCallback(async () => {
-    if (!code) return
-    const r = await fetch(`/api/session?code=${code}`)
+    const c = sessionCode.current
+    if (!c) return
+    const r = await fetch(`/api/session?code=${c}`)
     if (!r.ok) return
     const { session: s, participants: p } = await r.json()
     setSession(s)
@@ -44,40 +50,60 @@ export default function Home() {
     const st = s.status
     const prev = prevStatus.current
 
-    if (prev === 'countdown' && st === 'open' && !cdDone.current) {
+    if (prev === 'waiting' && st === 'open' && !cdDone.current) {
       cdDone.current = true
-      setCountdown(3)
       setScreen('countdown')
-      let c = 3
+      let n = 3
+      setCountdown(n)
       const t = setInterval(() => {
-        c--
-        setCountdown(c)
-        if (c <= 0) { clearInterval(t); setScreen('open') }
+        n--
+        setCountdown(n)
+        if (n <= 0) { clearInterval(t); setScreen('open') }
       }, 1000)
     }
-    if (st === 'open' && prev === 'waiting') setScreen('open')
-    if (st === 'spinning') setScreen('spinning')
-    if (st === 'result') setScreen('result')
-    if (st === 'closed') setScreen('closed')
-    if (st === 'ended' && screen !== 'done') setScreen('ended')
+
+    if (st === 'spinning' && prev !== 'spinning') {
+      setScreen('spinning')
+      clearInterval(spinTimerRef.current)
+      spinTimerRef.current = setInterval(() => setSpinAngle(a => a + 12), 50)
+    }
+
+    if (st === 'result' && prev !== 'result') {
+      clearInterval(spinTimerRef.current)
+      const w = p?.find(x => x.number === s.spinner_result)
+      if (w) setWinner(w)
+      setScreen('result')
+    }
+
+    if (st === 'closed' && prev !== 'closed') setScreen('closing')
+    if (st === 'ended' && !['done', 'closing', 'result', 'spinning'].includes(prev)) setScreen('ended')
 
     prevStatus.current = st
-  }, [code, screen])
+  }, [])
 
   useEffect(() => {
-    if (['waiting', 'open', 'spinning', 'result'].includes(screen)) {
+    if (['waiting', 'open', 'done', 'spinning', 'result', 'ended'].includes(screen)) {
       poll()
       pollRef.current = setInterval(poll, 1500)
     }
     return () => clearInterval(pollRef.current)
-  }, [screen, poll])
+  }, [screen])
 
-  // 네트워크 변경 감지 → 번호 반납
+  useEffect(() => {
+    if (screen !== 'closing') return
+    let sec = 5
+    setCloseCountdown(sec)
+    const t = setInterval(() => {
+      sec--
+      setCloseCountdown(sec)
+      if (sec <= 0) { clearInterval(t); window.close() }
+    }, 1000)
+    return () => clearInterval(t)
+  }, [screen])
+
   useEffect(() => {
     if (!pid || !myNumber) return
-    const release = () => {
-      navigator.sendBeacon('/api/participant', JSON.stringify({ participant_id: pid }))
-    }
+    const release = () => navigator.sendBeacon('/api/participant', JSON.stringify({ participant_id: pid }))
     window.addEventListener('beforeunload', release)
     return () => window.removeEventListener('beforeunload', release)
   }, [pid, myNumber])
@@ -90,6 +116,7 @@ export default function Home() {
     const { session: s } = await r.json()
     if (s.status === 'closed') return setErr('이미 종료된 세션입니다.')
     setSession(s)
+    sessionCode.current = code.toUpperCase().trim()
     setScreen('nick')
   }
 
@@ -107,7 +134,7 @@ export default function Home() {
       return setErr(data.error || '오류 발생')
     }
     setPid(data.participant.id)
-    prevStatus.current = session?.status || 'waiting'
+    prevStatus.current = 'waiting'
     setScreen('waiting')
   }
 
@@ -124,15 +151,27 @@ export default function Home() {
   }
 
   const takenNums = new Set(participants.filter(p => p.number).map(p => p.number))
-  const winner = session?.spinner_result
-    ? participants.find(p => p.number === session.spinner_result)
-    : null
+  const picked = participants.filter(p => p.number)
 
   return (
     <>
       <Head><title>번호뽑기</title></Head>
       <style>{gs}</style>
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
+
+        {/* 당첨자 흘러내리는 텍스트 */}
+        {screen === 'result' && winner && [...Array(6)].map((_, i) => (
+          <div key={i} style={{
+            position: 'fixed', left: `${5 + i * 16}%`, top: -60,
+            fontFamily: 'Syne', fontWeight: 800, fontSize: 20,
+            color: C.gold, textShadow: `0 0 12px ${C.goldGlow}`,
+            animation: `marquee ${2.5 + i * 0.4}s linear infinite`,
+            animationDelay: `${i * 0.5}s`,
+            whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 999,
+          }}>
+            🎉 {winner.nickname}님이 당첨되셨습니다!
+          </div>
+        ))}
 
         {screen === 'code' && (
           <Card>
@@ -167,9 +206,14 @@ export default function Home() {
 
         {screen === 'countdown' && (
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontFamily: 'Syne', fontSize: 20, color: C.muted, marginBottom: 20 }}>추첨번호 뽑기를 시작합니다!</div>
-            <div style={{ fontFamily: 'Syne', fontSize: 120, fontWeight: 800, color: C.gold,
-              textShadow: `0 0 40px ${C.goldGlow}`, lineHeight: 1, animation: 'pulse 0.8s ease-in-out infinite' }}>
+            <div style={{ fontFamily: 'Syne', fontSize: 24, color: C.muted, marginBottom: 20 }}>
+              추첨번호 뽑기를 시작합니다!
+            </div>
+            <div style={{
+              fontFamily: 'Syne', fontSize: 120, fontWeight: 800, color: C.gold,
+              textShadow: `0 0 40px ${C.goldGlow}`, lineHeight: 1,
+              animation: 'pulse 0.8s ease-in-out infinite'
+            }}>
               {countdown}
             </div>
           </div>
@@ -194,19 +238,21 @@ export default function Home() {
 
         {screen === 'spinning' && (
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontFamily: 'Syne', fontSize: 24, fontWeight: 800, marginBottom: 24 }}>🎡 추첨 중...</div>
-            <SpinnerWheel participants={participants} />
+            <div style={{ fontFamily: 'Syne', fontSize: 24, fontWeight: 800, marginBottom: 24, color: C.text }}>
+              🎡 추첨 중...
+            </div>
+            <SpinWheel participants={picked} angle={spinAngle} />
           </div>
         )}
 
         {screen === 'result' && winner && (
-          <div style={{ textAlign: 'center', animation: 'winnerPop 0.6s ease' }}>
-            <div style={{ fontSize: 60, marginBottom: 16 }}>🎉</div>
-            <div style={{ fontFamily: 'Syne', fontSize: 28, fontWeight: 800, color: C.gold,
+          <div style={{ textAlign: 'center', animation: 'winnerPop 0.6s ease', zIndex: 10, position: 'relative' }}>
+            <div style={{ fontSize: 70, marginBottom: 16 }}>🎉</div>
+            <div style={{ fontFamily: 'Syne', fontSize: 32, fontWeight: 800, color: C.gold,
               textShadow: `0 0 20px ${C.goldGlow}` }}>
               {winner.number}번 {winner.nickname}님
             </div>
-            <div style={{ fontSize: 22, marginTop: 12, color: C.text }}>당첨을 축하합니다!</div>
+            <div style={{ fontSize: 24, marginTop: 12, color: C.text }}>당첨을 축하합니다!</div>
           </div>
         )}
 
@@ -220,7 +266,15 @@ export default function Home() {
           </div>
         )}
 
-        {screen === 'closed' && <ClosedScreen />}
+        {screen === 'closing' && (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontFamily: 'Syne', fontSize: 26, fontWeight: 700, color: C.text, marginBottom: 16 }}>
+              {closeCountdown}초 후 추첨세션이 종료됩니다.
+            </div>
+            <div style={{ color: C.muted, fontSize: 16 }}>이용해주셔서 감사합니다. 🙏</div>
+          </div>
+        )}
+
         {screen === 'full' && (
           <Card>
             <div style={{ fontSize: 50, textAlign: 'center', marginBottom: 16 }}>😢</div>
@@ -230,24 +284,6 @@ export default function Home() {
         )}
       </div>
     </>
-  )
-}
-
-function ClosedScreen() {
-  const [sec, setSec] = useState(5)
-  useEffect(() => {
-    const t = setInterval(() => setSec(s => {
-      if (s <= 1) { clearInterval(t); window.close(); }
-      return s - 1
-    }), 1000)
-    return () => clearInterval(t)
-  }, [])
-  return (
-    <div style={{ textAlign: 'center' }}>
-      <div style={{ fontFamily: 'Syne', fontSize: 20, color: C.muted }}>
-        {sec}초 후 추첨세션이 종료됩니다.<br />이용해주셔서 감사합니다.
-      </div>
-    </div>
   )
 }
 
@@ -261,13 +297,12 @@ function NumberGrid({ max, taken, myNum, onPick }) {
         return (
           <button key={n} onClick={() => onPick && !isTaken && onPick(n)} style={{
             padding: '13px 0', fontFamily: 'Syne', fontWeight: 700, fontSize: 17,
-            borderRadius: 10, border: `2px solid ${isMe ? C.gold : isTaken ? C.border : C.border}`,
-            cursor: onPick && !isTaken ? 'pointer' : 'not-allowed',
-            background: isMe ? C.gold : isTaken ? C.taken : C.card,
-            color: isMe ? C.bg : isTaken ? C.takenText : C.text,
-            boxShadow: isMe ? `0 0 12px ${C.goldGlow}` : 'none',
+            borderRadius: 10, border: `2px solid ${isMe ? '#FFD166' : isTaken ? '#2A2F4A' : '#2A2F4A'}`,
+            cursor: onPick && !isTaken ? 'pointer' : 'default',
+            background: isMe ? '#FFD166' : isTaken ? '#2A2F4A' : '#1E2235',
+            color: isMe ? '#0D0F1A' : isTaken ? '#4A4F6A' : '#E8EAF6',
+            boxShadow: isMe ? '0 0 12px rgba(255,209,102,0.3)' : 'none',
             transition: 'all 0.12s',
-            title: isTaken ? '선택됨' : '',
           }}>
             {isMe ? `✓${n}` : isTaken ? '■' : n}
           </button>
@@ -277,66 +312,60 @@ function NumberGrid({ max, taken, myNum, onPick }) {
   )
 }
 
-function SpinnerWheel({ participants }) {
-  const picked = participants.filter(p => p.number)
-  const [angle, setAngle] = useState(0)
-  useEffect(() => {
-    const t = setInterval(() => setAngle(a => a + 15), 50)
-    return () => clearInterval(t)
-  }, [])
-  const size = 260
-  const cx = size / 2, cy = size / 2, r = cx - 10
-  const sliceAngle = picked.length > 0 ? 360 / picked.length : 360
+function SpinWheel({ participants, angle }) {
+  const size = 280, cx = size / 2, cy = size / 2, r = cx - 12
+  if (participants.length === 0) return null
+  const sliceAngle = 360 / participants.length
   return (
     <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
-      {picked.map((p, i) => {
-        const start = (i * sliceAngle + angle) % 360
-        const end = start + sliceAngle
-        const s = (a) => ({ x: cx + r * Math.cos(a * Math.PI / 180), y: cy + r * Math.sin(a * Math.PI / 180) })
-        const sp = s(start - 90), ep = s(end - 90)
+      {participants.map((p, i) => {
+        const start = (i * sliceAngle + angle - 90) * Math.PI / 180
+        const end = ((i + 1) * sliceAngle + angle - 90) * Math.PI / 180
+        const x1 = cx + r * Math.cos(start), y1 = cy + r * Math.sin(start)
+        const x2 = cx + r * Math.cos(end), y2 = cy + r * Math.sin(end)
         const large = sliceAngle > 180 ? 1 : 0
-        const hue = (i * 360 / picked.length)
+        const hue = i * 360 / participants.length
         return (
           <g key={p.id}>
-            <path d={`M${cx},${cy} L${sp.x},${sp.y} A${r},${r} 0 ${large},1 ${ep.x},${ep.y} Z`}
-              fill={`hsl(${hue},70%,55%)`} stroke="#0D0F1A" strokeWidth={1} />
+            <path d={`M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large},1 ${x2},${y2} Z`}
+              fill={`hsl(${hue},65%,55%)`} stroke="#0D0F1A" strokeWidth={1.5} />
           </g>
         )
       })}
-      <circle cx={cx} cy={cy} r={8} fill="#fff" />
-      <polygon points={`${cx},${cy - r + 5} ${cx - 8},${cy - r - 10} ${cx + 8},${cy - r - 10}`} fill={C.gold} />
+      <circle cx={cx} cy={cy} r={10} fill="#fff" />
+      <polygon points={`${cx},${cy-r-2} ${cx-9},${cy-r+12} ${cx+9},${cy-r+12}`} fill="#FFD166" />
     </svg>
   )
 }
 
 function Card({ children }) {
-  return <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 32, maxWidth: 420, width: '100%' }}>{children}</div>
+  return <div style={{ background: '#1E2235', border: '1px solid #2A2F4A', borderRadius: 16, padding: 32, maxWidth: 420, width: '100%' }}>{children}</div>
 }
 function Title({ children }) {
-  return <div style={{ fontFamily: 'Syne', fontSize: 28, fontWeight: 800, color: C.accent, marginBottom: 8, textAlign: 'center' }}>{children}</div>
+  return <div style={{ fontFamily: 'Syne', fontSize: 28, fontWeight: 800, color: '#6C63FF', marginBottom: 8, textAlign: 'center' }}>{children}</div>
 }
 function Sub({ children }) {
-  return <div style={{ color: C.muted, fontSize: 14, marginBottom: 24, textAlign: 'center' }}>{children}</div>
+  return <div style={{ color: '#7B80A0', fontSize: 14, marginBottom: 24, textAlign: 'center' }}>{children}</div>
 }
 function Input({ value, onChange, placeholder, onKeyDown, maxLength, center }) {
   return <input value={value} onChange={onChange} placeholder={placeholder} onKeyDown={onKeyDown} maxLength={maxLength}
-    style={{ width: '100%', background: '#161928', border: `1px solid ${C.border}`, borderRadius: 8,
-      color: C.text, padding: '10px 14px', fontSize: 16, outline: 'none', fontFamily: 'Inter',
+    style={{ width: '100%', background: '#161928', border: '1px solid #2A2F4A', borderRadius: 8,
+      color: '#E8EAF6', padding: '10px 14px', fontSize: 16, outline: 'none', fontFamily: 'Inter',
       marginBottom: 12, textAlign: center ? 'center' : 'left' }} />
 }
 function Err({ children }) {
-  return <div style={{ color: C.danger, fontSize: 13, marginBottom: 10, textAlign: 'center' }}>{children}</div>
+  return <div style={{ color: '#EF476F', fontSize: 13, marginBottom: 10, textAlign: 'center' }}>{children}</div>
 }
 function Btn({ children, onClick, loading, full }) {
   return (
     <button onClick={onClick} disabled={loading} style={{
-      width: full ? '100%' : 'auto', background: C.accent, color: '#fff', border: 'none',
+      width: full ? '100%' : 'auto', background: '#6C63FF', color: '#fff', border: 'none',
       borderRadius: 8, padding: '12px 24px', fontFamily: 'Syne', fontWeight: 700, fontSize: 15,
       cursor: loading ? 'wait' : 'pointer',
     }}>{loading ? '...' : children}</button>
   )
 }
 function Spinner() {
-  return <div style={{ width: 48, height: 48, border: `4px solid ${C.border}`, borderTopColor: C.accent,
+  return <div style={{ width: 48, height: 48, border: '4px solid #2A2F4A', borderTopColor: '#6C63FF',
     borderRadius: '50%', animation: 'spin 0.9s linear infinite', margin: '0 auto' }} />
 }
