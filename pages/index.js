@@ -5,7 +5,6 @@ const C = {
   bg: '#0D0F1A', card: '#1E2235', border: '#2A2F4A',
   accent: '#6C63FF', gold: '#FFD166', goldGlow: 'rgba(255,209,102,0.3)',
   danger: '#EF476F', text: '#E8EAF6', muted: '#7B80A0',
-  taken: '#2A2F4A', takenText: '#4A4F6A',
 }
 
 const gs = `
@@ -19,8 +18,7 @@ const gs = `
   .numBtn:hover{border-color:#6C63FF !important}
 `
 
-const SPIN_DURATION = 4000
-const TOTAL_ROTATION = 2520
+const SPIN_DURATION = 3000
 
 export default function Home() {
   const [screen, setScreen] = useState('code')
@@ -36,28 +34,30 @@ export default function Home() {
   const [closeCountdown, setCloseCountdown] = useState(5)
   const [winner, setWinner] = useState(null)
   const [spinAngle, setSpinAngle] = useState(0)
-  const [isSpinning, setIsSpinning] = useState(false)
   const pollRef = useRef(null)
   const prevStatus = useRef(null)
   const cdDone = useRef(false)
   const sessionCode = useRef('')
   const spinRAF = useRef(null)
+  const spinDone = useRef(false)
 
-  // 서버의 spin_started_at 기준으로 관리자와 완전히 동일한 각도 계산
   function startSpinSync(spinStartedAt, onDone) {
-    setIsSpinning(true)
     cancelAnimationFrame(spinRAF.current)
+    spinDone.current = false
     const serverStart = new Date(spinStartedAt).getTime()
+    const totalRotation = 1080 // 3바퀴 고정
 
     const animate = (now) => {
       const elapsed = now - serverStart
       const progress = Math.min(elapsed / SPIN_DURATION, 1)
+      // easeOutCubic - 빠르게 시작해서 서서히 멈춤
       const ease = 1 - Math.pow(1 - progress, 3)
-      setSpinAngle((ease * TOTAL_ROTATION) % 360)
+      setSpinAngle((ease * totalRotation) % 360)
+
       if (progress < 1) {
         spinRAF.current = requestAnimationFrame(animate)
       } else {
-        setIsSpinning(false)
+        spinDone.current = true
         if (onDone) onDone()
       }
     }
@@ -76,7 +76,6 @@ export default function Home() {
     const st = s.status
     const prev = prevStatus.current
 
-    // 대기 → 오픈: 카운트다운
     if (prev === 'waiting' && st === 'open' && !cdDone.current) {
       cdDone.current = true
       setScreen('countdown')
@@ -89,20 +88,20 @@ export default function Home() {
       }, 1000)
     }
 
-    // 추첨 시작 - 서버 시각 기준으로 동기화
-    if (st === 'spinning' && prev !== 'spinning' && s.spin_started_at) {
+    if (st === 'ended' && prev === 'open') setScreen('wait_spin')
+    if (st === 'ended' && prev === 'waiting') setScreen('wait_spin')
+
+    if (st === 'spinning' && prev !== 'spinning' && s.spin_started_at && !spinDone.current) {
       setScreen('spinning')
       setWinner(null)
       startSpinSync(s.spin_started_at)
     }
 
-    // 당첨 결과 - 돌림판 멈추고 당첨자 표시
     if (st === 'result' && prev !== 'result') {
       const w = p?.find(x => x.number === s.spinner_result)
       cancelAnimationFrame(spinRAF.current)
-      setScreen('spinning')
-      // 이미 spin_started_at 기준으로 맞춰서 돌리다가 끝나면 당첨자 표시
       if (s.spin_started_at) {
+        setScreen('spinning')
         startSpinSync(s.spin_started_at, () => {
           if (w) setWinner(w)
           setScreen('result')
@@ -114,13 +113,12 @@ export default function Home() {
     }
 
     if (st === 'closed' && prev !== 'closed') setScreen('closing')
-    if (st === 'ended' && !['done', 'closing', 'result', 'spinning'].includes(prev)) setScreen('ended')
 
     prevStatus.current = st
   }, [])
 
   useEffect(() => {
-    if (['waiting', 'open', 'done', 'spinning', 'result', 'ended'].includes(screen)) {
+    if (['waiting', 'open', 'done', 'wait_spin', 'spinning', 'result', 'ended'].includes(screen)) {
       poll()
       pollRef.current = setInterval(poll, 1500)
     }
@@ -178,7 +176,6 @@ export default function Home() {
 
   async function pickNumber(num) {
     if (myNumber) return
-    // 즉시 UI 반응
     setMyNumber(num)
     setScreen('done')
     const r = await fetch('/api/participant', {
@@ -187,7 +184,6 @@ export default function Home() {
       body: JSON.stringify({ participant_id: pid, session_id: sessionCode.current, number: num })
     })
     if (!r.ok) {
-      // 실패시 롤백
       setMyNumber(null)
       setScreen('open')
       poll()
@@ -204,7 +200,6 @@ export default function Home() {
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center',
         justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
 
-        {/* 당첨자 흘러내리는 텍스트 */}
         {screen === 'result' && winner && [...Array(6)].map((_, i) => (
           <div key={i} style={{
             position: 'fixed', left: `${5 + i * 16}%`, top: -60,
@@ -275,6 +270,16 @@ export default function Home() {
             <div style={{ marginTop: 16, color: C.muted, fontSize: 13, textAlign: 'center' }}>
               선택됨: {takenNums.size} / {session.max_num}
             </div>
+          </div>
+        )}
+
+        {screen === 'wait_spin' && (
+          <div style={{ textAlign: 'center' }}>
+            <Spinner />
+            <div style={{ fontFamily: 'Syne', fontSize: 22, fontWeight: 700, marginTop: 24, color: C.gold }}>
+              곧이어 추첨이 시작됩니다
+            </div>
+            <div style={{ color: C.muted, fontSize: 15, marginTop: 10 }}>잠시만 기다려주세요!</div>
           </div>
         )}
 
