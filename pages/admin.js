@@ -18,7 +18,6 @@ export default function Admin() {
   const [screen, setScreen] = useState('login')
   const [pw, setPw] = useState('')
   const [pwErr, setPwErr] = useState('')
-  const [maxNum, setMaxNum] = useState('')
   const [session, setSession] = useState(null)
   const [participants, setParticipants] = useState([])
   const [adminPw, setAdminPw] = useState('')
@@ -27,8 +26,11 @@ export default function Admin() {
   const [winner, setWinner] = useState(null)
   const [isSpinning, setIsSpinning] = useState(false)
   const [showSpin, setShowSpin] = useState(false)
+  const [editMaxNum, setEditMaxNum] = useState('')
   const pollRef = useRef(null)
   const spinRAF = useRef(null)
+  const sessionIdRef = useRef('')
+  const adminPwRef = useRef('')
 
   function runSpinAnimation(onDone) {
     setIsSpinning(true)
@@ -36,7 +38,6 @@ export default function Admin() {
     let startTime = null
     const duration = 4000
     const totalRot = 1440 + Math.random() * 360
-
     const step = (now) => {
       if (!startTime) startTime = now
       const elapsed = now - startTime
@@ -55,31 +56,33 @@ export default function Admin() {
   }
 
   const poll = useCallback(async () => {
-    if (!session) return
-    const r = await fetch(`/api/session?code=${session.id}`)
+    const code = sessionIdRef.current
+    if (!code) return
+    const r = await fetch(`/api/session?code=${code}`)
     if (!r.ok) return
     const { session: s, participants: p } = await r.json()
     setSession(s)
     setParticipants(p || [])
-  }, [session])
+  }, [])
 
   useEffect(() => {
-    if (screen === 'dashboard' && session) {
+    if (screen === 'dashboard') {
       poll()
       pollRef.current = setInterval(poll, 1500)
     }
     return () => clearInterval(pollRef.current)
-  }, [screen, session?.id])
+  }, [screen])
 
   async function createSession() {
     if (!pw.trim()) return setPwErr('비밀번호를 입력하세요.')
-    // 최대번호 미설정이면 일단 999로 생성 (나중에 변경 가능)
     const r = await fetch('/api/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_password: pw, max_num: parseInt(maxNum) || 999 })
+      body: JSON.stringify({ admin_password: pw, max_num: 999 })
     })
     const { session: s } = await r.json()
+    adminPwRef.current = pw
+    sessionIdRef.current = s.id
     setAdminPw(pw)
     setSession(s)
     setParticipants([])
@@ -93,7 +96,7 @@ export default function Admin() {
     await fetch('/api/session', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: session.id, admin_password: adminPw, max_num: parseInt(newMax) })
+      body: JSON.stringify({ code: sessionIdRef.current, admin_password: adminPwRef.current, max_num: parseInt(newMax) })
     })
     await poll()
   }
@@ -102,7 +105,7 @@ export default function Admin() {
     await fetch('/api/control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: session.id, admin_password: adminPw, action, ...extra })
+      body: JSON.stringify({ code: sessionIdRef.current, admin_password: adminPwRef.current, action, ...extra })
     })
     await poll()
   }
@@ -121,7 +124,7 @@ export default function Admin() {
   }
 
   function copyLink() {
-    const url = `${window.location.origin}/?code=${session.id}`
+    const url = `${window.location.origin}/?code=${sessionIdRef.current}`
     navigator.clipboard.writeText(url)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
@@ -129,7 +132,6 @@ export default function Admin() {
 
   const picked = participants.filter(p => p.number)
   const st = session?.status
-  const [editMaxNum, setEditMaxNum] = useState('')
 
   return (
     <>
@@ -218,8 +220,14 @@ export default function Admin() {
                   {st !== 'closed' && (
                     <button onClick={() => control('close')} style={btn(C.danger)}>🔒 세션 종료</button>
                   )}
-                  <button onClick={() => { setScreen('login'); setSession(null); setPw('') }}
-                    style={btn(C.muted)}>새 세션</button>
+                  <button onClick={() => {
+                    clearInterval(pollRef.current)
+                    sessionIdRef.current = ''
+                    adminPwRef.current = ''
+                    setSession(null)
+                    setPw('')
+                    setScreen('login')
+                  }} style={btn(C.muted)}>새 세션</button>
                 </div>
               </div>
 
@@ -274,7 +282,7 @@ export default function Admin() {
 
               {/* 참가자 목록 */}
               <div style={card()}>
-                <div style={cardTitle()}>👥 참가자 목록 ({picked.length}명 선택완료 / 전체 {participants.length}명 접속)</div>
+                <div style={cardTitle()}>👥 참가자 목록 ({picked.length}명 선택 / 전체 {participants.length}명 접속)</div>
                 {picked.length === 0
                   ? <div style={{ color: C.muted, fontSize: 14, marginTop: 16 }}>아직 아무도 선택하지 않았습니다.</div>
                   : <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -300,17 +308,25 @@ export default function Admin() {
 
 function SpinWheel({ participants, angle }) {
   const size = 280, cx = size / 2, cy = size / 2, r = cx - 12
-  if (participants.length === 0) return <div style={{ color: '#7B80A0', marginTop: 20 }}>참가자 없음</div>
+  if (participants.length === 0) return null
+
+  // 1명도 돌림판으로 돌아가게 (원 하나)
   if (participants.length === 1) {
+    const rad = (angle - 90) * Math.PI / 180
+    const px2 = cx + r * Math.cos(rad), py2 = cy + r * Math.sin(rad)
     return (
       <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
         <circle cx={cx} cy={cy} r={r} fill="hsl(260,65%,55%)" stroke="#0D0F1A" strokeWidth={2} />
-        <text x={cx} y={cy - 10} textAnchor="middle" dominantBaseline="middle" fontSize={22} fontWeight="700" fill="#fff">{participants[0].number}번</text>
-        <text x={cx} y={cy + 16} textAnchor="middle" dominantBaseline="middle" fontSize={13} fill="#fff">{participants[0].nickname}</text>
+        <text x={cx} y={cy - 10} textAnchor="middle" dominantBaseline="middle"
+          fontSize={22} fontWeight="700" fill="#fff">{participants[0].number}번</text>
+        <text x={cx} y={cy + 16} textAnchor="middle" dominantBaseline="middle"
+          fontSize={13} fill="#fff">{participants[0].nickname}</text>
+        <circle cx={cx} cy={cy} r={10} fill="#fff" />
         <polygon points={`${cx},${cy-r-2} ${cx-9},${cy-r+12} ${cx+9},${cy-r+12}`} fill="#FFD166" />
       </svg>
     )
   }
+
   const sliceAngle = 360 / participants.length
   return (
     <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
