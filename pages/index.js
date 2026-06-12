@@ -49,8 +49,9 @@ export default function Home() {
 
     const animate = (now) => {
       const elapsed = now - serverStart
+      // elapsed가 음수거나 비정상이면 즉시 종료
+      if (elapsed < 0) { spinDone.current = true; if (onDone) onDone(); return }
       const progress = Math.min(elapsed / SPIN_DURATION, 1)
-      // easeOutCubic - 빠르게 시작해서 서서히 멈춤
       const ease = 1 - Math.pow(1 - progress, 3)
       setSpinAngle((ease * totalRotation) % 360)
 
@@ -58,6 +59,7 @@ export default function Home() {
         spinRAF.current = requestAnimationFrame(animate)
       } else {
         spinDone.current = true
+        cancelAnimationFrame(spinRAF.current)
         if (onDone) onDone()
       }
     }
@@ -312,6 +314,9 @@ export default function Home() {
             {myNumber
               ? <div style={{ color: C.muted, marginTop: 12 }}>내 번호: <span style={{ color: C.gold, fontWeight: 700 }}>#{myNumber}</span></div>
               : <div style={{ color: C.muted, marginTop: 12 }}>번호를 선택하지 못했습니다.</div>}
+            <div style={{ marginTop: 20, color: C.gold, fontFamily: 'Syne', fontSize: 16, fontWeight: 700 }}>
+              곧 추첨이 시작됩니다! 🎡
+            </div>
           </div>
         )}
 
@@ -363,6 +368,21 @@ function NumberGrid({ max, taken, myNum, onPick }) {
 function SpinWheel({ participants, angle }) {
   const size = 280, cx = size / 2, cy = size / 2, r = cx - 12
   if (participants.length === 0) return null
+
+  // 1명이면 돌림판 대신 이름만 표시
+  if (participants.length === 1) {
+    return (
+      <div style={{ textAlign: 'center' }}>
+        <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
+          <circle cx={cx} cy={cy} r={r} fill="hsl(260,65%,55%)" stroke="#0D0F1A" strokeWidth={1.5} />
+          <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle"
+            fontSize={18} fontWeight="700" fill="#fff">{participants[0].number}</text>
+          <circle cx={cx} cy={cy} r={10} fill="#fff" />
+          <polygon points={`${cx},${cy-r-2} ${cx-9},${cy-r+12} ${cx+9},${cy-r+12}`} fill="#FFD166" />
+        </svg>
+      </div>
+    )
+  }
   const sliceAngle = 360 / participants.length
   return (
     <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
