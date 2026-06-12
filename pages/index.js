@@ -4,7 +4,7 @@ import Head from 'next/head'
 const C = {
   bg: '#0D0F1A', card: '#1E2235', border: '#2A2F4A',
   accent: '#6C63FF', gold: '#FFD166', goldGlow: 'rgba(255,209,102,0.3)',
-  success: '#06D6A0', danger: '#EF476F', text: '#E8EAF6', muted: '#7B80A0',
+  danger: '#EF476F', text: '#E8EAF6', muted: '#7B80A0',
   taken: '#2A2F4A', takenText: '#4A4F6A',
 }
 
@@ -18,6 +18,9 @@ const gs = `
   @keyframes marquee{0%{top:-60px}100%{top:110vh}}
   .numBtn:hover{border-color:#6C63FF !important}
 `
+
+const SPIN_DURATION = 4000
+const TOTAL_ROTATION = 2520
 
 export default function Home() {
   const [screen, setScreen] = useState('code')
@@ -39,23 +42,18 @@ export default function Home() {
   const cdDone = useRef(false)
   const sessionCode = useRef('')
   const spinRAF = useRef(null)
-  const spinStartTime = useRef(null)
-  const spinStartAngle = useRef(0)
 
-  // 돌림판 애니메이션 - 관리자와 동일하게
-  function startSpinAnimation(onDone) {
+  // 서버의 spin_started_at 기준으로 관리자와 완전히 동일한 각도 계산
+  function startSpinSync(spinStartedAt, onDone) {
     setIsSpinning(true)
-    const totalRotation = 1800 + Math.random() * 720
-    const duration = 4000
-    spinStartTime.current = performance.now()
-    spinStartAngle.current = 0
+    cancelAnimationFrame(spinRAF.current)
+    const serverStart = new Date(spinStartedAt).getTime()
 
     const animate = (now) => {
-      const elapsed = now - spinStartTime.current
-      const progress = Math.min(elapsed / duration, 1)
+      const elapsed = now - serverStart
+      const progress = Math.min(elapsed / SPIN_DURATION, 1)
       const ease = 1 - Math.pow(1 - progress, 3)
-      const angle = ease * totalRotation
-      setSpinAngle(angle % 360)
+      setSpinAngle((ease * TOTAL_ROTATION) % 360)
       if (progress < 1) {
         spinRAF.current = requestAnimationFrame(animate)
       } else {
@@ -78,6 +76,7 @@ export default function Home() {
     const st = s.status
     const prev = prevStatus.current
 
+    // 대기 → 오픈: 카운트다운
     if (prev === 'waiting' && st === 'open' && !cdDone.current) {
       cdDone.current = true
       setScreen('countdown')
@@ -90,20 +89,28 @@ export default function Home() {
       }, 1000)
     }
 
-    if (st === 'spinning' && prev !== 'spinning') {
+    // 추첨 시작 - 서버 시각 기준으로 동기화
+    if (st === 'spinning' && prev !== 'spinning' && s.spin_started_at) {
       setScreen('spinning')
-      startSpinAnimation()
+      setWinner(null)
+      startSpinSync(s.spin_started_at)
     }
 
+    // 당첨 결과 - 돌림판 멈추고 당첨자 표시
     if (st === 'result' && prev !== 'result') {
-      cancelAnimationFrame(spinRAF.current)
       const w = p?.find(x => x.number === s.spinner_result)
-      // 돌림판 먼저 보여주고 멈추는 애니메이션 후 당첨자 표시
+      cancelAnimationFrame(spinRAF.current)
       setScreen('spinning')
-      startSpinAnimation(() => {
+      // 이미 spin_started_at 기준으로 맞춰서 돌리다가 끝나면 당첨자 표시
+      if (s.spin_started_at) {
+        startSpinSync(s.spin_started_at, () => {
+          if (w) setWinner(w)
+          setScreen('result')
+        })
+      } else {
         if (w) setWinner(w)
         setScreen('result')
-      })
+      }
     }
 
     if (st === 'closed' && prev !== 'closed') setScreen('closing')
@@ -171,7 +178,7 @@ export default function Home() {
 
   async function pickNumber(num) {
     if (myNumber) return
-    // 즉시 UI 반응 (서버 응답 기다리지 않고 바로 반영)
+    // 즉시 UI 반응
     setMyNumber(num)
     setScreen('done')
     const r = await fetch('/api/participant', {
@@ -180,7 +187,7 @@ export default function Home() {
       body: JSON.stringify({ participant_id: pid, session_id: sessionCode.current, number: num })
     })
     if (!r.ok) {
-      // 실패 시 롤백
+      // 실패시 롤백
       setMyNumber(null)
       setScreen('open')
       poll()
@@ -194,8 +201,10 @@ export default function Home() {
     <>
       <Head><title>번호뽑기</title></Head>
       <style>{gs}</style>
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
 
+        {/* 당첨자 흘러내리는 텍스트 */}
         {screen === 'result' && winner && [...Array(6)].map((_, i) => (
           <div key={i} style={{
             position: 'fixed', left: `${5 + i * 16}%`, top: -60,
@@ -204,9 +213,7 @@ export default function Home() {
             animation: `marquee ${2.5 + i * 0.4}s linear infinite`,
             animationDelay: `${i * 0.5}s`,
             whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 999,
-          }}>
-            🎉 {winner.nickname}님이 당첨되셨습니다!
-          </div>
+          }}>🎉 {winner.nickname}님이 당첨되셨습니다!</div>
         ))}
 
         {screen === 'code' && (
@@ -245,11 +252,9 @@ export default function Home() {
             <div style={{ fontFamily: 'Syne', fontSize: 24, color: C.muted, marginBottom: 20 }}>
               추첨번호 뽑기를 시작합니다!
             </div>
-            <div style={{
-              fontFamily: 'Syne', fontSize: 120, fontWeight: 800, color: C.gold,
+            <div style={{ fontFamily: 'Syne', fontSize: 120, fontWeight: 800, color: C.gold,
               textShadow: `0 0 40px ${C.goldGlow}`, lineHeight: 1,
-              animation: 'pulse 0.8s ease-in-out infinite'
-            }}>
+              animation: 'pulse 0.8s ease-in-out infinite' }}>
               {countdown}
             </div>
           </div>
@@ -265,12 +270,8 @@ export default function Home() {
                 1~{session.max_num} 중 하나 선택 · 중복 불가
               </div>
             </div>
-            <NumberGrid
-              max={session.max_num}
-              taken={takenNums}
-              myNum={myNumber}
-              onPick={screen === 'open' ? pickNumber : null}
-            />
+            <NumberGrid max={session.max_num} taken={takenNums} myNum={myNumber}
+              onPick={screen === 'open' ? pickNumber : null} />
             <div style={{ marginTop: 16, color: C.muted, fontSize: 13, textAlign: 'center' }}>
               선택됨: {takenNums.size} / {session.max_num}
             </div>
@@ -300,7 +301,9 @@ export default function Home() {
         {screen === 'ended' && (
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 50, marginBottom: 16 }}>🔒</div>
-            <div style={{ fontFamily: 'Syne', fontSize: 22, fontWeight: 800, color: C.danger }}>번호 선택이 종료되었습니다</div>
+            <div style={{ fontFamily: 'Syne', fontSize: 22, fontWeight: 800, color: C.danger }}>
+              번호 선택이 종료되었습니다
+            </div>
             {myNumber
               ? <div style={{ color: C.muted, marginTop: 12 }}>내 번호: <span style={{ color: C.gold, fontWeight: 700 }}>#{myNumber}</span></div>
               : <div style={{ color: C.muted, marginTop: 12 }}>번호를 선택하지 못했습니다.</div>}
@@ -329,10 +332,9 @@ export default function Home() {
 }
 
 function NumberGrid({ max, taken, myNum, onPick }) {
-  const nums = Array.from({ length: max }, (_, i) => i + 1)
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(58px, 1fr))', gap: 8 }}>
-      {nums.map(n => {
+      {Array.from({ length: max }, (_, i) => i + 1).map(n => {
         const isTaken = taken.has(n)
         const isMe = myNum === n
         return (
@@ -343,7 +345,7 @@ function NumberGrid({ max, taken, myNum, onPick }) {
             background: isMe ? '#FFD166' : isTaken ? '#2A2F4A' : '#1E2235',
             color: isMe ? '#0D0F1A' : isTaken ? '#4A4F6A' : '#E8EAF6',
             boxShadow: isMe ? '0 0 12px rgba(255,209,102,0.3)' : 'none',
-            transition: 'all 0.12s',
+            transition: 'all 0.1s',
           }}>
             {isMe ? `✓${n}` : isTaken ? '■' : n}
           </button>
