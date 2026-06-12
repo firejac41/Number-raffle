@@ -22,7 +22,8 @@ export default async function handler(req, res) {
   } else if (action === 'end') {
     update = { status: 'ended', ended_at: now }
   } else if (action === 'spin') {
-    update = { status: 'spinning' }
+    // 스핀 시작 시각 저장 → 참가자가 동일한 타이밍에 맞출 수 있음
+    update = { status: 'spinning', spin_started_at: now }
   } else if (action === 'result') {
     update = { status: 'result', spinner_result }
   } else if (action === 'close') {
