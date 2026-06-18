@@ -43,6 +43,9 @@ export default function Home() {
   const [adminCode, setAdminCode] = useState('')
   const [adminCodeErr, setAdminCodeErr] = useState('')
 
+  // 강퇴 사유
+  const [kickReason, setKickReason] = useState('')
+
   const pollRef = useRef(null)
   const prevStatus = useRef(null)
   const cdDone = useRef(false)
@@ -83,6 +86,17 @@ export default function Home() {
     const st = s.status
     const prev = prevStatus.current
 
+    // 강퇴 감지: 내 participant_id가 목록에 없거나 kick_reason이 있으면
+    if (pid) {
+      const me = p?.find(x => x.id === pid)
+      if (me?.kick_reason) {
+        setKickReason(me.kick_reason)
+        setScreen('kicked')
+        clearInterval(pollRef.current)
+        return
+      }
+    }
+
     if (prev === 'waiting' && st === 'open' && !cdDone.current) {
       cdDone.current = true
       setScreen('countdown')
@@ -115,7 +129,7 @@ export default function Home() {
   useEffect(() => {
     if (['waiting', 'open', 'done', 'ended', 'spinning', 'result', 'closed'].includes(screen)) {
       poll()
-      pollRef.current = setInterval(poll, 500)
+      pollRef.current = setInterval(poll, 1500)
     }
     return () => clearInterval(pollRef.current)
   }, [screen])
@@ -341,6 +355,22 @@ export default function Home() {
             <div style={{ fontSize: 50, textAlign: 'center', marginBottom: 16 }}>😢</div>
             <Title>자리가 다 찼습니다</Title>
             <Sub>다음 기회에!</Sub>
+          </Card>
+        )}
+
+        {/* 강퇴 화면 */}
+        {screen === 'kicked' && (
+          <Card>
+            <div style={{ fontSize: 50, textAlign: 'center', marginBottom: 16 }}>🚫</div>
+            <div style={{ fontFamily: 'Syne', fontSize: 22, fontWeight: 800,
+              color: C.danger, textAlign: 'center', marginBottom: 12 }}>
+              강퇴되었습니다
+            </div>
+            <div style={{ background: '#0D0F1A', border: '1px solid #2A2F4A',
+              borderRadius: 10, padding: '14px 18px', textAlign: 'center',
+              color: '#E8EAF6', fontSize: 15, marginBottom: 8 }}>
+              {kickReason}
+            </div>
           </Card>
         )}
 
