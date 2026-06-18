@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Head from 'next/head'
+import { useRouter } from 'next/router'
+
+// 관리자 진입 코드 (하드코딩)
+const ADMIN_PORTAL_CODE = 'donquixote12'
 
 const C = {
   bg: '#0D0F1A', card: '#1E2235', border: '#2A2F4A',
@@ -18,6 +22,7 @@ const gs = `
 `
 
 export default function Home() {
+  const router = useRouter()
   const [screen, setScreen] = useState('code')
   const [code, setCode] = useState('')
   const [nick, setNick] = useState('')
@@ -29,10 +34,15 @@ export default function Home() {
   const [err, setErr] = useState('')
   const [numErr, setNumErr] = useState('')
   const [loading, setLoading] = useState(false)
-  const [closeCountdown, setCloseCountdown] = useState(5)
   const [winner, setWinner] = useState(null)
   const [spinAngle, setSpinAngle] = useState(0)
   const [showSpin, setShowSpin] = useState(false)
+
+  // 관리자 포탈 관련
+  const [showAdminPortal, setShowAdminPortal] = useState(false)
+  const [adminCode, setAdminCode] = useState('')
+  const [adminCodeErr, setAdminCodeErr] = useState('')
+
   const pollRef = useRef(null)
   const prevStatus = useRef(null)
   const cdDone = useRef(false)
@@ -40,13 +50,11 @@ export default function Home() {
   const spinRAF = useRef(null)
   const spinTriggered = useRef(false)
 
-  // 단순 로컬 애니메이션 - 시간 기반 아님
   function runSpinAnimation(onDone) {
     setShowSpin(true)
     let startTime = null
     const duration = 4000
     const totalRot = 1440
-
     const step = (now) => {
       if (!startTime) startTime = now
       const elapsed = now - startTime
@@ -87,7 +95,6 @@ export default function Home() {
 
     if (st === 'ended' && (prev === 'open' || prev === 'waiting')) setScreen('ended')
 
-    // result 감지하면 돌림판 애니메이션 실행 (한 번만)
     if (st === 'result' && !spinTriggered.current) {
       spinTriggered.current = true
       const w = p?.find(x => x.number === s.spinner_result)
@@ -99,27 +106,18 @@ export default function Home() {
       })
     }
 
-    if (st === 'closed' && prev !== 'closed') setScreen('closing')
+    // closed: about:blank 대신 closed 화면 유지
+    if (st === 'closed' && prev !== 'closed') setScreen('closed')
 
     prevStatus.current = st
   }, [])
 
   useEffect(() => {
-    if (['waiting', 'open', 'done', 'ended', 'spinning', 'result', 'closing'].includes(screen)) {
+    if (['waiting', 'open', 'done', 'ended', 'spinning', 'result', 'closed'].includes(screen)) {
       poll()
       pollRef.current = setInterval(poll, 1500)
     }
     return () => clearInterval(pollRef.current)
-  }, [screen])
-
-  useEffect(() => {
-    if (screen !== 'closing') return
-    let sec = 5; setCloseCountdown(sec)
-    const t = setInterval(() => {
-      sec--; setCloseCountdown(sec)
-      if (sec <= 0) { clearInterval(t); window.location.href = 'about:blank' }
-    }, 1000)
-    return () => clearInterval(t)
   }, [screen])
 
   async function enterCode() {
@@ -155,7 +153,6 @@ export default function Home() {
   async function pickNumber(num) {
     if (myNumber) return
     setNumErr('')
-    // 즉시 UI 반응
     setMyNumber(num)
     setScreen('done')
     const r = await fetch('/api/participant', {
@@ -165,7 +162,6 @@ export default function Home() {
     })
     const data = await r.json()
     if (!r.ok) {
-      // 실패 = 동시 클릭으로 누군가 먼저 선택함
       setMyNumber(null)
       setScreen('open')
       if (data.error?.includes('이미 선택된')) {
@@ -175,16 +171,29 @@ export default function Home() {
     }
   }
 
+  // 관리자 포탈 코드 확인
+  function tryAdminPortal() {
+    if (adminCode === ADMIN_PORTAL_CODE) {
+      setShowAdminPortal(false)
+      setAdminCode('')
+      setAdminCodeErr('')
+      router.push('/admin')
+    } else {
+      setAdminCodeErr('코드가 틀렸습니다.')
+    }
+  }
+
   const takenNums = new Set(participants.filter(p => p.number).map(p => p.number))
   const picked = participants.filter(p => p.number)
 
   return (
     <>
-      <Head><title>번호뽑기</title></Head>
+      <Head><title>실시간 추첨기</title></Head>
       <style>{gs}</style>
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center',
         justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
 
+        {/* 당첨자 축하 흘러내리는 텍스트 */}
         {screen === 'result' && winner && [...Array(6)].map((_, i) => (
           <div key={i} style={{
             position: 'fixed', left: `${5 + i * 16}%`, top: -60,
@@ -196,9 +205,17 @@ export default function Home() {
           }}>🎉 {winner.nickname}님이 당첨되셨습니다!</div>
         ))}
 
+        {/* 코드 입력 화면 - 제목/부제 추가 */}
         {screen === 'code' && (
           <Card>
-            <Title>🎰 번호뽑기</Title>
+            <div style={{ textAlign: 'center', marginBottom: 24 }}>
+              <div style={{ fontFamily: 'Syne', fontSize: 30, fontWeight: 800, color: C.accent, letterSpacing: '-0.5px' }}>
+                🎰 실시간 추첨기
+              </div>
+              <div style={{ fontFamily: 'Inter', fontSize: 13, color: C.muted, marginTop: 6 }}>
+                주작없는 실시간 추첨
+              </div>
+            </div>
             <Sub>관리자에게 받은 초대코드를 입력하세요</Sub>
             <Input value={code} onChange={e => setCode(e.target.value.toUpperCase())}
               placeholder="예: AB3K9Z" onKeyDown={e => e.key === 'Enter' && enterCode()} maxLength={6} center />
@@ -255,9 +272,15 @@ export default function Home() {
                 </div>
               )}
             </div>
-            <NumberGrid max={session.max_num < 999 ? session.max_num : 30}
-              taken={takenNums} myNum={myNumber}
-              onPick={screen === 'open' ? pickNumber : null} />
+
+            {/* max_num 설정된 경우: 그리드 / 미설정: 직접 입력 */}
+            {session.max_num < 999 ? (
+              <NumberGrid max={session.max_num} taken={takenNums} myNum={myNumber}
+                onPick={screen === 'open' ? pickNumber : null} />
+            ) : (
+              <NumberInput onPick={screen === 'open' ? pickNumber : null} myNum={myNumber} />
+            )}
+
             <div style={{ marginTop: 16, color: C.muted, fontSize: 13, textAlign: 'center' }}>
               선택됨: {takenNums.size} / {session.max_num < 999 ? session.max_num : '?'}
             </div>
@@ -299,12 +322,17 @@ export default function Home() {
           </div>
         )}
 
-        {screen === 'closing' && (
+        {/* 세션 종료 화면 - about:blank 대신 이 화면 유지 */}
+        {screen === 'closed' && (
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontFamily: 'Syne', fontSize: 26, fontWeight: 700, color: C.text, marginBottom: 16 }}>
-              {closeCountdown}초 후 추첨세션이 종료됩니다.
+            <div style={{ fontSize: 60, marginBottom: 20 }}>🎊</div>
+            <div style={{ fontFamily: 'Syne', fontSize: 26, fontWeight: 800, color: C.text, marginBottom: 12 }}>
+              추첨이 종료되었습니다
             </div>
-            <div style={{ color: C.muted, fontSize: 16 }}>이용해주셔서 감사합니다. 🙏</div>
+            {myNumber
+              ? <div style={{ color: C.muted, fontSize: 16 }}>내 번호: <span style={{ color: C.gold, fontWeight: 700 }}>#{myNumber}</span></div>
+              : <div style={{ color: C.muted, fontSize: 16 }}>번호를 선택하지 못했습니다.</div>}
+            <div style={{ color: C.muted, fontSize: 14, marginTop: 16 }}>이용해주셔서 감사합니다. 🙏</div>
           </div>
         )}
 
@@ -315,8 +343,87 @@ export default function Home() {
             <Sub>다음 기회에!</Sub>
           </Card>
         )}
+
+        {/* 관리자 포탈 버튼 - 우측 하단 고정 */}
+        <button
+          onClick={() => { setShowAdminPortal(true); setAdminCode(''); setAdminCodeErr('') }}
+          style={{
+            position: 'fixed', bottom: 16, right: 16,
+            background: 'transparent', border: `1px solid ${C.border}`,
+            color: C.muted, borderRadius: 8, padding: '6px 12px',
+            fontSize: 11, cursor: 'pointer', opacity: 0.35,
+            fontFamily: 'Inter',
+          }}
+        >관리자</button>
+
+        {/* 관리자 코드 입력 모달 */}
+        {showAdminPortal && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          }}>
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16,
+              padding: 32, maxWidth: 360, width: '90%', textAlign: 'center' }}>
+              <div style={{ fontFamily: 'Syne', fontSize: 20, fontWeight: 800, color: C.accent, marginBottom: 8 }}>
+                🔐 관리자 인증
+              </div>
+              <div style={{ color: C.muted, fontSize: 13, marginBottom: 20 }}>관리자 코드를 입력하세요</div>
+              <input
+                type="password"
+                placeholder="코드 입력"
+                value={adminCode}
+                onChange={e => setAdminCode(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && tryAdminPortal()}
+                style={{
+                  width: '100%', background: '#161928', border: `1px solid ${C.border}`,
+                  borderRadius: 8, color: C.text, padding: '10px 14px',
+                  fontSize: 15, outline: 'none', fontFamily: 'Inter',
+                  marginBottom: 12, textAlign: 'center',
+                }}
+              />
+              {adminCodeErr && <div style={{ color: C.danger, fontSize: 13, marginBottom: 10 }}>{adminCodeErr}</div>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setShowAdminPortal(false)}
+                  style={{ flex: 1, background: C.border, color: C.text, border: 'none',
+                    borderRadius: 8, padding: '10px', fontFamily: 'Syne', fontWeight: 700,
+                    fontSize: 14, cursor: 'pointer' }}>취소</button>
+                <button onClick={tryAdminPortal}
+                  style={{ flex: 1, background: C.accent, color: '#fff', border: 'none',
+                    borderRadius: 8, padding: '10px', fontFamily: 'Syne', fontWeight: 700,
+                    fontSize: 14, cursor: 'pointer' }}>확인</button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </>
+  )
+}
+
+// max_num 미설정 시 번호 직접 입력 컴포넌트
+function NumberInput({ onPick, myNum }) {
+  const [val, setVal] = useState('')
+  if (myNum) return (
+    <div style={{ textAlign: 'center', fontSize: 80, fontFamily: 'Syne',
+      fontWeight: 800, color: '#FFD166', textShadow: '0 0 30px rgba(255,209,102,0.3)' }}>
+      ✓ {myNum}번
+    </div>
+  )
+  return (
+    <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16 }}>
+      <input type="number" min="1" value={val}
+        onChange={e => setVal(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && val && onPick(parseInt(val))}
+        placeholder="번호 입력"
+        style={{ width: 130, background: '#161928', border: '1px solid #2A2F4A',
+          borderRadius: 8, color: '#E8EAF6', padding: '12px 14px', fontSize: 22,
+          textAlign: 'center', outline: 'none', fontFamily: 'Syne', fontWeight: 700 }} />
+      <button onClick={() => val && onPick(parseInt(val))}
+        style={{ background: '#6C63FF', color: '#fff', border: 'none',
+          borderRadius: 8, padding: '12px 24px', fontFamily: 'Syne',
+          fontWeight: 700, fontSize: 15, cursor: 'pointer' }}>선택</button>
+    </div>
   )
 }
 
