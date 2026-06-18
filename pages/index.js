@@ -115,7 +115,7 @@ export default function Home() {
   useEffect(() => {
     if (['waiting', 'open', 'done', 'ended', 'spinning', 'result', 'closed'].includes(screen)) {
       poll()
-      pollRef.current = setInterval(poll, 1500)
+      pollRef.current = setInterval(poll, 500)
     }
     return () => clearInterval(pollRef.current)
   }, [screen])
