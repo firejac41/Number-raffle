@@ -19,15 +19,39 @@ export default async function handler(req, res) {
 
   if (action === 'start') {
     update = { status: 'open', started_at: now }
+
   } else if (action === 'end') {
     update = { status: 'ended', ended_at: now }
+
   } else if (action === 'spin') {
-    // 스핀 시작 시각 저장 → 참가자가 동일한 타이밍에 맞출 수 있음
-    update = { status: 'spinning', spin_started_at: now }
+    // ✅ 서버에서 직접 당첨자 뽑기 (관리자 조작 불가)
+    // 번호를 선택한 참가자 목록을 DB에서 가져옴
+    const { data: pickedList } = await supabase
+      .from('participants')
+      .select('id, nickname, number')
+      .eq('session_id', code)
+      .not('number', 'is', null) // 번호 선택한 사람만
+
+    if (!pickedList || pickedList.length === 0) {
+      return res.status(400).json({ error: '번호를 선택한 참가자가 없습니다.' })
+    }
+
+    // 서버에서 랜덤으로 당첨자 결정
+    const winner = pickedList[Math.floor(Math.random() * pickedList.length)]
+
+    update = {
+      status: 'spinning',
+      spin_started_at: now,
+      spinner_result: winner.number, // 결과를 spin 시점에 바로 저장
+    }
+
   } else if (action === 'result') {
-    update = { status: 'result', spinner_result }
+    // spin에서 이미 spinner_result가 저장되므로, result 액션은 상태만 변경
+    update = { status: 'result' }
+
   } else if (action === 'close') {
     update = { status: 'closed', ended_at: now }
+
   } else {
     return res.status(400).json({ error: '알 수 없는 action' })
   }
