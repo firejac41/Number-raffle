@@ -93,17 +93,17 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true })
   }
 
-  // 강퇴(kick) 또는 번호 반납
+  // 강퇴(kick)
   if (req.method === 'DELETE') {
-    const { participant_id, kick } = req.body
+    const { participant_id, kick, kick_reason } = req.body
 
     if (kick) {
-      // ✅ 강퇴: 참가자 DB에서 완전 삭제
-      const { error } = await supabase.from('participants').delete().eq('id', participant_id)
+      // ✅ 강퇴: kick_reason 저장 (참가자 화면에서 감지해서 사유 표시)
+      const { error } = await supabase
+        .from('participants')
+        .update({ kick_reason: kick_reason || '관리자에 의해 강퇴되었습니다.' })
+        .eq('id', participant_id)
       if (error) return res.status(500).json({ error: error.message })
-    } else {
-      // 번호 반납: 번호만 null로
-      await supabase.from('participants').update({ number: null, picked_at: null }).eq('id', participant_id)
     }
 
     return res.status(200).json({ ok: true })
