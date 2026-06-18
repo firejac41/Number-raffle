@@ -27,6 +27,8 @@ export default function Admin() {
   const [isSpinning, setIsSpinning] = useState(false)
   const [showSpin, setShowSpin] = useState(false)
   const [editMaxNum, setEditMaxNum] = useState('')
+  const [kickTarget, setKickTarget] = useState(null)  // { id, nickname }
+  const [kickReason, setKickReason] = useState('')
   const pollRef = useRef(null)
   const spinRAF = useRef(null)
   const sessionIdRef = useRef('')
@@ -140,14 +142,26 @@ export default function Admin() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  // 참가자 강퇴
-  async function kickParticipant(participantId, nickname) {
-    if (!confirm(`${nickname}님을 강퇴하시겠습니까?`)) return
+  // 강퇴 모달 열기
+  function openKickModal(p) {
+    setKickTarget({ id: p.id, nickname: p.nickname })
+    setKickReason('')
+  }
+
+  // 강퇴 실행
+  async function confirmKick() {
+    if (!kickTarget) return
     await fetch('/api/participant', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ participant_id: participantId, kick: true })
+      body: JSON.stringify({
+        participant_id: kickTarget.id,
+        kick: true,
+        kick_reason: kickReason.trim() || '관리자에 의해 강퇴되었습니다.'
+      })
     })
+    setKickTarget(null)
+    setKickReason('')
     await poll()
   }
 
@@ -332,7 +346,7 @@ export default function Admin() {
                           {/* 강퇴 버튼 - 세션이 열려있을 때만 표시 */}
                           {(st === 'waiting' || st === 'open') && (
                             <button
-                              onClick={() => kickParticipant(p.id, p.nickname)}
+                              onClick={() => openKickModal(p)}
                               style={{ background: C.danger + '22', color: C.danger, border: `1px solid ${C.danger}44`,
                                 borderRadius: 6, padding: '3px 8px', fontSize: 11,
                                 cursor: 'pointer', fontFamily: 'Inter' }}>
@@ -345,6 +359,50 @@ export default function Admin() {
                   </div>
                 }
               </div>
+
+              {/* 강퇴 사유 입력 모달 */}
+              {kickTarget && (
+                <div style={{
+                  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+                }}>
+                  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16,
+                    padding: 32, maxWidth: 380, width: '90%', textAlign: 'center' }}>
+                    <div style={{ fontSize: 36, marginBottom: 12 }}>🚫</div>
+                    <div style={{ fontFamily: 'Syne', fontSize: 18, fontWeight: 800, color: C.danger, marginBottom: 6 }}>
+                      강퇴 확인
+                    </div>
+                    <div style={{ color: C.muted, fontSize: 14, marginBottom: 20 }}>
+                      <b style={{ color: C.text }}>{kickTarget.nickname}</b>님을 강퇴합니다.
+                    </div>
+                    <div style={{ textAlign: 'left', marginBottom: 8 }}>
+                      <div style={{ color: C.muted, fontSize: 13, marginBottom: 6 }}>강퇴 사유 (선택)</div>
+                      <input
+                        type="text"
+                        placeholder="예: 닉네임 불일치, 도배 등"
+                        value={kickReason}
+                        onChange={e => setKickReason(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && confirmKick()}
+                        style={{ ...inp(), width: '100%' }}
+                      />
+                    </div>
+                    <div style={{ color: C.muted, fontSize: 12, marginBottom: 20 }}>
+                      입력하지 않으면 기본 메시지가 표시됩니다.
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => setKickTarget(null)}
+                        style={{ flex: 1, background: C.border, color: C.text, border: 'none',
+                          borderRadius: 8, padding: '10px', fontFamily: 'Syne', fontWeight: 700,
+                          fontSize: 14, cursor: 'pointer' }}>취소</button>
+                      <button onClick={confirmKick}
+                        style={{ flex: 1, background: C.danger, color: '#fff', border: 'none',
+                          borderRadius: 8, padding: '10px', fontFamily: 'Syne', fontWeight: 700,
+                          fontSize: 14, cursor: 'pointer' }}>강퇴</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
             </>
           )}
         </div>
