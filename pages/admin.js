@@ -113,13 +113,23 @@ export default function Admin() {
   async function startSpin() {
     const picked = participants.filter(p => p.number)
     if (picked.length === 0) return alert('번호를 선택한 참가자가 없습니다.')
+
+    // ✅ 서버에 spin 요청 → 서버가 당첨자 결정 (관리자 조작 불가)
     await control('spin')
+
+    // 서버가 결정한 결과 가져오기
+    const r = await fetch(`/api/session?code=${sessionIdRef.current}`)
+    const { session: s, participants: p } = await r.json()
+    setSession(s)
+    setParticipants(p || [])
+    const w = p.find(x => x.number === s.spinner_result)
+
     setWinner(null)
+    // 애니메이션 실행 후 당첨자 발표
     runSpinAnimation(async () => {
-      const idx = Math.floor(Math.random() * picked.length)
-      const w = picked[idx]
       setWinner(w)
-      await control('result', { spinner_result: w.number })
+      // 상태를 result로 변경 (참가자 화면에도 결과 표시)
+      await control('result')
     })
   }
 
@@ -130,12 +140,23 @@ export default function Admin() {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  // 참가자 강퇴
+  async function kickParticipant(participantId, nickname) {
+    if (!confirm(`${nickname}님을 강퇴하시겠습니까?`)) return
+    await fetch('/api/participant', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ participant_id: participantId, kick: true })
+    })
+    await poll()
+  }
+
   const picked = participants.filter(p => p.number)
   const st = session?.status
 
   return (
     <>
-      <Head><title>관리자 | 번호뽑기</title></Head>
+      <Head><title>관리자 | 실시간 추첨기</title></Head>
       <style>{gs}</style>
       <div style={{ minHeight: '100vh', padding: '32px 20px' }}>
         <div style={{ maxWidth: 900, margin: '0 auto' }}>
@@ -143,7 +164,18 @@ export default function Admin() {
           {screen === 'login' && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh' }}>
               <div style={card()}>
-                <div style={title()}>🔐 관리자 로그인</div>
+                {/* 제목 */}
+                <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                  <div style={{ fontFamily: 'Syne', fontSize: 26, fontWeight: 800, color: C.accent }}>
+                    🎰 실시간 추첨기
+                  </div>
+                  <div style={{ fontFamily: 'Inter', fontSize: 12, color: C.muted, marginTop: 4 }}>
+                    주작없는 실시간 추첨
+                  </div>
+                </div>
+                <div style={{ fontFamily: 'Syne', fontSize: 18, fontWeight: 700, color: C.text, textAlign: 'center', marginBottom: 6 }}>
+                  🔐 관리자 로그인
+                </div>
                 <div style={{ color: C.muted, fontSize: 14, marginBottom: 24, textAlign: 'center' }}>
                   세션 비밀번호를 설정하고 시작하세요
                 </div>
@@ -280,19 +312,34 @@ export default function Admin() {
                 )}
               </div>
 
-              {/* 참가자 목록 */}
+              {/* 참가자 목록 + 강퇴 버튼 */}
               <div style={card()}>
                 <div style={cardTitle()}>👥 참가자 목록 ({picked.length}명 선택 / 전체 {participants.length}명 접속)</div>
-                {picked.length === 0
-                  ? <div style={{ color: C.muted, fontSize: 14, marginTop: 16 }}>아직 아무도 선택하지 않았습니다.</div>
+                {participants.length === 0
+                  ? <div style={{ color: C.muted, fontSize: 14, marginTop: 16 }}>아직 아무도 입장하지 않았습니다.</div>
                   : <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {[...picked].sort((a, b) => a.number - b.number).map(p => (
+                    {[...participants].sort((a, b) => (a.number || 9999) - (b.number || 9999)).map(p => (
                       <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between',
                         alignItems: 'center', padding: '10px 14px', background: C.bg,
                         borderRadius: 8, border: `1px solid ${C.border}` }}>
                         <span style={{ fontSize: 14 }}>{p.nickname}</span>
-                        <span style={{ fontFamily: 'Syne', fontWeight: 800, fontSize: 18,
-                          color: C.gold, textShadow: `0 0 8px ${C.goldGlow}` }}>#{p.number}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {p.number
+                            ? <span style={{ fontFamily: 'Syne', fontWeight: 800, fontSize: 18,
+                                color: C.gold, textShadow: `0 0 8px ${C.goldGlow}` }}>#{p.number}</span>
+                            : <span style={{ fontSize: 12, color: C.muted }}>미선택</span>
+                          }
+                          {/* 강퇴 버튼 - 세션이 열려있을 때만 표시 */}
+                          {(st === 'waiting' || st === 'open') && (
+                            <button
+                              onClick={() => kickParticipant(p.id, p.nickname)}
+                              style={{ background: C.danger + '22', color: C.danger, border: `1px solid ${C.danger}44`,
+                                borderRadius: 6, padding: '3px 8px', fontSize: 11,
+                                cursor: 'pointer', fontFamily: 'Inter' }}>
+                              강퇴
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -310,10 +357,7 @@ function SpinWheel({ participants, angle }) {
   const size = 280, cx = size / 2, cy = size / 2, r = cx - 12
   if (participants.length === 0) return null
 
-  // 1명도 돌림판으로 돌아가게 (원 하나)
   if (participants.length === 1) {
-    const rad = (angle - 90) * Math.PI / 180
-    const px2 = cx + r * Math.cos(rad), py2 = cy + r * Math.sin(rad)
     return (
       <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
         <circle cx={cx} cy={cy} r={r} fill="hsl(260,65%,55%)" stroke="#0D0F1A" strokeWidth={2} />
@@ -371,6 +415,5 @@ function StatusBadge({ status }) {
 
 function card() { return { background: '#1E2235', border: '1px solid #2A2F4A', borderRadius: 14, padding: 24 } }
 function cardTitle() { return { fontFamily: 'Syne', fontSize: 15, fontWeight: 700, color: '#E8EAF6' } }
-function title() { return { fontFamily: 'Syne', fontSize: 24, fontWeight: 800, color: '#6C63FF', textAlign: 'center', marginBottom: 8 } }
 function inp() { return { background: '#161928', border: '1px solid #2A2F4A', borderRadius: 8, color: '#E8EAF6', padding: '10px 14px', fontSize: 14, outline: 'none', fontFamily: 'Inter' } }
 function btn(bg, big = false) { return { background: bg, color: bg === '#FFD166' ? '#0D0F1A' : '#fff', border: 'none', borderRadius: 8, padding: big ? '12px 24px' : '8px 16px', fontFamily: 'Syne', fontWeight: 700, fontSize: big ? 15 : 13, cursor: 'pointer' } }
